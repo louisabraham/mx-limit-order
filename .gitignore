@@ -1,3 +1,5 @@
 /node_modules/
 output*/
 target/
+.DS_Store
+wallet.json
