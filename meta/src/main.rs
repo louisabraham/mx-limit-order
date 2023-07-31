@@ -1,3 +1,3 @@
 fn main() {
-    multiversx_sc_meta::cli_main::<contract::AbiProvider>();
+    multiversx_sc_meta::cli_main::<limit_order::AbiProvider>();
 }

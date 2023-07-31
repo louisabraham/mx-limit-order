@@ -14,7 +14,7 @@ lto = true
 debug = false
 panic = "abort"
 
-[dependencies.contract]
+[dependencies.limit-order]
 path = ".."
 
 [dependencies.multiversx-sc-wasm-adapter]

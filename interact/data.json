@@ -1,5 +1,5 @@
 {
-  "code": "file:output/contract.wasm",
+  "code": "file:output/limit-order.wasm",
   "address": {
     "devnet": "",
     "testnet": "",
