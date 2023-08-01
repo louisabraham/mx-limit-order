@@ -7,6 +7,7 @@ multiversx_sc::derive_imports!();
 pub trait LimitOrderContract {
     #[init]
     fn init(&self) {}
+
     #[proxy]
     fn contract_proxy(&self, sc_address: ManagedAddress) -> self::Proxy<Self::Api>;
 
@@ -46,66 +47,39 @@ pub trait LimitOrderContract {
         let mut order: Order<Self::Api> = self.orders().get(order_id);
         require!(order.active, "The order has been cancelled");
         let paid = self.call_value().egld_or_single_esdt();
-        require!(
-            paid.token_identifier == order.price.token_identifier
-                && paid.token_nonce == order.price.token_nonce,
-            "The order is not for the same token"
-        );
-        require!(
-            paid.amount >= order.price.amount,
-            "The amount is not enough to fill the order"
-        );
         let caller = self.blockchain().get_caller();
-        self.send().direct(
-            &caller,
-            &order.payment.token_identifier,
-            order.payment.token_nonce,
-            &order.payment.amount,
-        );
-        self.send().direct(
-            &order.owner,
-            &order.price.token_identifier,
-            order.price.token_nonce,
-            &order.price.amount,
-        );
-        order.active = false;
-        self.orders().set(order_id, &order);
-    }
+        let address_self = self.blockchain().get_sc_address();
 
-    #[callback]
-    fn after_remote_fill_order(
-        &self,
-        order_id: usize,
-        caller: ManagedAddress,
-        remaining: BigUint,
-        #[call_result] result: ManagedAsyncCallResult<()>,
-    ) {
-        require!(false, "error");
-
-        let mut order: Order<Self::Api> = self.orders().get(order_id);
-        let payment = self.call_value().egld_or_single_esdt();
-
-        require!(result.is_ok(), "The remote call failed");
+        // prevent flaw: if the transactions are done between shards,
+        // the storage will be changed even if they fail
+        let shard_self = self.blockchain().get_shard_of_address(&address_self);
+        let shard_owner = self
+            .blockchain()
+            .get_shard_of_address(&self.blockchain().get_owner_address());
+        let shard_caller = self.blockchain().get_shard_of_address(&caller);
         require!(
-            payment.token_identifier == order.price.token_identifier
-                && payment.token_nonce == order.price.token_nonce,
-            "The order is not for the same token"
-        );
-        require!(
-            payment.amount >= order.price.amount,
-            "The amount is not enough to fill the order"
+            shard_self == shard_owner && shard_self == shard_caller,
+            "The caller or the owner is not on the same shard as the contract"
         );
 
-        if remaining > 0 {
+        if caller != address_self {
+            require!(
+                paid.token_identifier == order.price.token_identifier
+                    && paid.token_nonce == order.price.token_nonce,
+                "The order is not for the same token"
+            );
+            require!(
+                paid.amount >= order.price.amount,
+                "The amount is not enough to fill the order"
+            );
             self.send().direct(
                 &caller,
                 &order.payment.token_identifier,
                 order.payment.token_nonce,
-                &remaining,
+                &order.payment.amount,
             );
         }
 
-        // choice: a limit order can receive more. We declare that the surplus price goes to the owner
         self.send().direct(
             &order.owner,
             &order.price.token_identifier,
@@ -125,30 +99,67 @@ pub trait LimitOrderContract {
         other_id: usize,
         other_price: EgldOrEsdtTokenPayment,
     ) {
-        let order: Order<Self::Api> = self.orders().get(order_id);
+        let mut order: Order<Self::Api> = self.orders().get(order_id);
         require!(order.active, "The order has been cancelled");
         require!(
             order.payment.token_identifier == other_price.token_identifier
                 && order.payment.token_nonce == other_price.token_nonce,
             "The other order is not for the same token"
         );
-        let remaining = order.payment.amount - other_price.amount.clone();
-        require!(remaining >= 0, "The remaining amount is negative");
-        (self
-            .contract_proxy(other_address)
-            .fill_order(other_id)
-            .with_egld_or_single_esdt_transfer((
-                other_price.token_identifier,
-                other_price.token_nonce,
-                other_price.amount,
-            ))
-            .async_call()
-            .with_callback(self.callbacks().after_remote_fill_order(
-                order_id,
-                self.blockchain().get_caller(),
-                remaining,
-            ))
-            .call_and_exit());
+        let diff_payment = order.payment.amount.clone() - other_price.amount.clone();
+        require!(diff_payment >= 0, "The remaining amount is negative");
+
+        let address_self = self.blockchain().get_sc_address();
+        let received_price: BigUint;
+        if address_self == other_address {
+            self.contract_proxy(other_address)
+                .fill_order(other_id)
+                .execute_on_dest_context::<IgnoreValue>();
+            let other_order = self.orders().get(other_id);
+            received_price = other_order.payment.amount.clone();
+        } else {
+            let balance_price_before = self
+                .blockchain()
+                .get_sc_balance(&order.price.token_identifier, order.price.token_nonce);
+            self.contract_proxy(other_address)
+                .fill_order(other_id)
+                .with_egld_or_single_esdt_transfer((
+                    other_price.token_identifier,
+                    other_price.token_nonce,
+                    other_price.amount,
+                ))
+                .execute_on_dest_context::<IgnoreValue>();
+            let balance_price_after = self
+                .blockchain()
+                .get_sc_balance(&order.price.token_identifier, order.price.token_nonce);
+            received_price = balance_price_after.clone() - balance_price_before.clone();
+        }
+
+        require!(
+            received_price >= order.price.amount,
+            "The other order did not pay enough"
+        );
+
+        if diff_payment > 0 {
+            self.send().direct(
+                &self.blockchain().get_caller(),
+                &order.payment.token_identifier,
+                order.payment.token_nonce,
+                &diff_payment,
+            );
+        }
+
+        // choice: a limit order can receive more. We declare that the surplus price goes to the owner
+        // the surplus price does not exist in practice as the arbitrageur can create another proxy contract
+        self.send().direct(
+            &order.owner,
+            &order.price.token_identifier,
+            order.price.token_nonce,
+            &received_price,
+        );
+
+        order.active = false;
+        self.orders().set(order_id, &order);
     }
 
     #[storage_mapper("orders")]

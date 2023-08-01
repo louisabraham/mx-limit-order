@@ -95,12 +95,14 @@ test("Test fill order with other", async () => {
         balance: 0n,
         hasPairs: [],
     });
+    [sender, receiver] = [receiver, sender];
+
     const contractId1 = (
         await sender.callContract({
             callee: contract,
             funcName: "create_order",
-            funcArgs: [e.Tuple(e.Str(egldId), e.U64(0), e.U(90_000))],
-            esdts: [{ id: sftId, nonce: 1, amount: 100_000 }],
+            funcArgs: [e.Tuple(e.Str(sftId), e.U64(1), e.U(100_000))],
+            value: 100_000,
             gasLimit: 10_000_000,
         })
     ).returnData[0];
@@ -110,20 +112,20 @@ test("Test fill order with other", async () => {
         await receiver.callContract({
             callee: otherContract,
             funcName: "create_order",
-            funcArgs: [e.Tuple(e.Str(sftId), e.U64(0), e.U(100_000))],
-            value: 100_000,
+            funcArgs: [e.Tuple(e.Str(egldId), e.U64(0), e.U(90_000))],
+            esdts: [{ id: sftId, nonce: 1, amount: 100_000 }],
             gasLimit: 10_000_000,
         })
     ).returnData[0];
     console.log("contract 2 created successfully");
 
     assertAccount(await contract.getAccountWithPairs(), {
-        balance: 0n,
-        hasPairs: [e.p.Esdts([{ id: sftId, nonce: 1, amount: 100_000 }])],
-    });
-    assertAccount(await otherContract.getAccountWithPairs(), {
         balance: 100_000n,
         hasPairs: [],
+    });
+    assertAccount(await otherContract.getAccountWithPairs(), {
+        balance: 0n,
+        hasPairs: [e.p.Esdts([{ id: sftId, nonce: 1, amount: 100_000 }])],
     });
     assertAccount(await sender.getAccountWithPairs(), {
         balance: 0n,
@@ -137,15 +139,15 @@ test("Test fill order with other", async () => {
         balance: 0n,
         hasPairs: [],
     });
-    console.log("contract created successfully");
-    await receiver.callContract({
+
+    await arbitrageur.callContract({
         callee: contract,
         funcName: "fill_order_with_other",
         funcArgs: [
             contractId1,
             otherContract,
             contractId2,
-            e.Tuple(e.Str(sftId), e.U64(1), e.U(100_000)),
+            e.Tuple(e.Str(egldId), e.U64(0), e.U(90_000)),
         ],
         gasLimit: 10_000_000,
     });
@@ -158,26 +160,102 @@ test("Test fill order with other", async () => {
         (await contract.getAccountWithPairs()).balance,
         (await otherContract.getAccountWithPairs()).balance
     );
-    assertAccount(await sender.getAccountWithPairs(), {
-        balance: 90_000n,
-        hasPairs: [],
-    });
-
-    assertAccount(await receiver.getAccountWithPairs(), {
-        balance: 0n,
-        hasPairs: [e.p.Esdts([{ id: sftId, nonce: 1, amount: 100_000 }])],
-    });
-    assertAccount(await arbitrageur.getAccountWithPairs(), {
-        balance: 10_000n,
-        hasPairs: [e.p.Esdts([{ id: sftId, nonce: 1, amount: 0 }])],
-    });
-
     assertAccount(await contract.getAccountWithPairs(), {
         balance: 0n,
         hasPairs: [e.p.Esdts([{ id: sftId, nonce: 1, amount: 0 }])],
     });
     assertAccount(await otherContract.getAccountWithPairs(), {
         balance: 0n,
+        hasPairs: [e.p.Esdts([{ id: sftId, nonce: 1, amount: 0 }])],
+    });
+
+    assertAccount(await sender.getAccountWithPairs(), {
+        balance: 0n,
+        hasPairs: [e.p.Esdts([{ id: sftId, nonce: 1, amount: 100_000 }])],
+    });
+    assertAccount(await receiver.getAccountWithPairs(), {
+        balance: 90_000n,
+        hasPairs: [],
+    });
+    assertAccount(await arbitrageur.getAccountWithPairs(), {
+        balance: 10_000n,
+        hasPairs: [e.p.Esdts([{ id: sftId, nonce: 1, amount: 0 }])],
+    });
+});
+
+test("Test fill order with self", async () => {
+    assertAccount(await contract.getAccountWithPairs(), {
+        balance: 0n,
+        hasPairs: [],
+    });
+    [sender, receiver] = [receiver, sender];
+    otherContract = contract;
+    const contractId1 = (
+        await sender.callContract({
+            callee: contract,
+            funcName: "create_order",
+            funcArgs: [e.Tuple(e.Str(sftId), e.U64(1), e.U(100_000))],
+            value: 100_000,
+            gasLimit: 10_000_000,
+        })
+    ).returnData[0];
+    console.log("contract 1 created successfully");
+
+    const contractId2 = (
+        await receiver.callContract({
+            callee: otherContract,
+            funcName: "create_order",
+            funcArgs: [e.Tuple(e.Str(egldId), e.U64(0), e.U(90_000))],
+            esdts: [{ id: sftId, nonce: 1, amount: 100_000 }],
+            gasLimit: 10_000_000,
+        })
+    ).returnData[0];
+    console.log("contract 2 created successfully");
+
+    assertAccount(await sender.getAccountWithPairs(), {
+        balance: 0n,
+        hasPairs: [],
+    });
+    assertAccount(await receiver.getAccountWithPairs(), {
+        balance: 0n,
+        hasPairs: [],
+    });
+    assertAccount(await arbitrageur.getAccountWithPairs(), {
+        balance: 0n,
+        hasPairs: [],
+    });
+
+    await arbitrageur.callContract({
+        callee: contract,
+        funcName: "fill_order_with_other",
+        funcArgs: [
+            contractId1,
+            otherContract,
+            contractId2,
+            e.Tuple(e.Str(egldId), e.U64(0), e.U(90_000)),
+        ],
+        gasLimit: 10_000_000,
+    });
+    console.log("contract filled successfully");
+
+    console.log(
+        await sender.getAccountWithPairs(),
+        await receiver.getAccountWithPairs(),
+        await arbitrageur.getAccountWithPairs(),
+        (await contract.getAccountWithPairs()).balance,
+        (await otherContract.getAccountWithPairs()).balance
+    );
+
+    assertAccount(await sender.getAccountWithPairs(), {
+        balance: 0n,
+        hasPairs: [e.p.Esdts([{ id: sftId, nonce: 1, amount: 100_000 }])],
+    });
+    assertAccount(await receiver.getAccountWithPairs(), {
+        balance: 90_000n,
+        hasPairs: [],
+    });
+    assertAccount(await arbitrageur.getAccountWithPairs(), {
+        balance: 10_000n,
         hasPairs: [e.p.Esdts([{ id: sftId, nonce: 1, amount: 0 }])],
     });
 });

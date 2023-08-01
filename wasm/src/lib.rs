@@ -6,7 +6,7 @@
 
 // Init:                                 1
 // Endpoints:                            4
-// Async Callback:                       1
+// Async Callback (empty):               1
 // Total number of exported functions:   6
 
 #![no_std]
@@ -22,6 +22,7 @@ multiversx_sc_wasm_adapter::endpoints! {
         cancel_order
         fill_order
         fill_order_with_other
-        callBack
     )
 }
+
+multiversx_sc_wasm_adapter::empty_callback! {}
